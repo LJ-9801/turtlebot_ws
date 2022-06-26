@@ -25,16 +25,11 @@ struct Pos
 };
 
 
-struct Cell
-{
-    coord_t x;
-    coord_t y; 
-};
-
 struct Info
 {
-    Cell c;
+    int c;
     Pos p;
+    double d;
 };
 
 
@@ -145,6 +140,8 @@ void Callback(const nav_msgs::Odometry::ConstPtr& q ,
 
     std::vector<Info> g(grid->data.size());
 
+
+    double smallest = 1000;
     //convert original map information to a vector containing 
     //a cell position and world position
     for(int i = 0; i<grid->data.size(); i++){
@@ -152,23 +149,33 @@ void Callback(const nav_msgs::Odometry::ConstPtr& q ,
         coord_t x = result.quot;
         coord_t y = result.rem;
 
-        //get cell
-        Cell currenCell;
-        currenCell.x = x;
-        currenCell.y = y;
-
         //convert to position based on grid info
         Pos p;
-        p.x = currenCell.x*resolution+x_o;
-        p.y = currenCell.y*resolution+y_o;
+        p.x = x*resolution+x_o;
+        p.y = y*resolution+y_o;
+
 
         Info information;
-        information.c = currenCell;
         information.p = p;
+        information.c = grid->data[i];
+
+
+        //calcualte the distance of each point to the state of the robot
+        if(information.c > 90){
+            double dx = abs(p.x - q_i.x_pos);
+            double dy = abs(p.y - q_i.y_pos);
+            double ref_d = sqrt(dx*dx + dy*dy);
+            information.d = ref_d;
+        }else{
+            information.d = -1;
+        }
 
         g[i] = information;
+        if(g[i].d < smallest && g[i].d != -1){
+            smallest = g[i].d;
+        }
     }
 
-    ROS_INFO("cell with index [%d] is position [%f,%f]. and the state of the robot is [%f,%f,%f]", 
-               index, g[index].p.x, g[index].p.y, q_i.x_pos, q_i.y_pos, q_i.theta);
+    
+    ROS_INFO("the closest point is [%f]", smallest);
 }
