@@ -68,8 +68,16 @@ int main(int argc, char** argv){
     typedef sync_policies::ApproximateTime<Odometry, OccupancyGrid> Mysyncpolicy;
 
     Synchronizer<Mysyncpolicy> sync(Mysyncpolicy(2000), odom, grid);
-    sync.registerCallback(boost::bind(&Callback, _1, _2));
-    ros::spin();
+
+    ros::Rate loop_rate(100);
+
+    while (ros::ok()){
+        sync.registerCallback(boost::bind(&Callback, _1, _2));
+        ros::spinOnce();
+        loop_rate.sleep();
+    }
+    
+    
     return 0;
 }
 
