@@ -214,6 +214,11 @@ void Callback(const nav_msgs::Odometry::ConstPtr& q ,
         }
     }
 
+    double gradrho[2];
+    gradrho[0] = (rho1-rho)/e;
+    gradrho[1] = (rho2-rho)/e;
+    gradrho[2] = 0;
+
     
-    ROS_INFO("the closest point is [%f], rho1 is [%f], rho2 is [%f]", rho, rho1, rho2);
+    ROS_INFO("gradrho 0 is [%f], 1 [%f]", gradrho[0], gradrho[1]);
 }
