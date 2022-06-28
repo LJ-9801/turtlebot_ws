@@ -29,7 +29,7 @@ struct Info
 {
     int c;
     Pos p;
-    double d;
+    double d,d1,d2;
 };
 
 
@@ -63,7 +63,6 @@ int main(int argc, char** argv){
 
     message_filters::Subscriber<Odometry> odom(nh, "odom", 5);
     message_filters::Subscriber<OccupancyGrid> grid(nh, "map", 1000);
-    //TimeSynchronizer<Odometry, OccupancyGrid> sync(odom, grid, 2000);
 
     typedef sync_policies::ApproximateTime<Odometry, OccupancyGrid> Mysyncpolicy;
 
@@ -148,8 +147,14 @@ void Callback(const nav_msgs::Odometry::ConstPtr& q ,
 
     std::vector<Info> g(grid->data.size());
 
+    //parameters
+    double rho = 1000;
+    double rho1 = 1000;
+    double rho2 = 1000;
+    //double rho3 = 1000;
+    double e = 0.01;
 
-    double smallest = 1000;
+
     //convert original map information to a vector containing 
     //a cell position and world position
     for(int i = 0; i<grid->data.size(); i++){
@@ -170,20 +175,45 @@ void Callback(const nav_msgs::Odometry::ConstPtr& q ,
 
         //calcualte the distance of each point to the state of the robot
         if(information.c > 90){
+
+
             double dx = abs(p.x - q_i.x_pos);
             double dy = abs(p.y - q_i.y_pos);
             double ref_d = sqrt(dx*dx + dy*dy);
+
+            double dx1 = abs(p.x - q_i.x_pos+e);
+            double dy1 = abs(p.y - q_i.y_pos);
+            double ref_d1 = sqrt(dx1*dx1 + dy1*dy1);
+
+            double dx2 = abs(p.x - q_i.x_pos);
+            double dy2 = abs(p.y - q_i.y_pos+e);
+            double ref_d2 = sqrt(dx2*dx2 + dy2*dy2);
+
+
             information.d = ref_d;
+            information.d1 = ref_d1;
+            information.d2 = ref_d2;
         }else{
             information.d = -1;
+            information.d1 = -1;
+            information.d2 = -1;
         }
 
         g[i] = information;
-        if(g[i].d < smallest && g[i].d != -1){
-            smallest = g[i].d;
+
+        if(g[i].d < rho && g[i].d != -1){
+            rho = g[i].d;
+        }
+
+        if(g[i].d1 < rho1 && g[i].d != -1){
+            rho1 = g[i].d1;
+        }
+
+        if(g[i].d2 < rho2 && g[i].d != -1){
+            rho2 = g[i].d2;
         }
     }
 
     
-    ROS_INFO("the closest point is [%f]", smallest);
+    ROS_INFO("the closest point is [%f], rho1 is [%f], rho2 is [%f]", rho, rho1, rho2);
 }
