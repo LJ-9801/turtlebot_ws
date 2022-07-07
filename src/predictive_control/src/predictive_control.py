@@ -1,10 +1,24 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 from cmath import pi
-from itertools import count
-from matplotlib import markers, pyplot as plt
 import math as mt
 import rospy
 import numpy as np
+from nav_msgs.msg import OccupancyGrid
+
+def callback(msg):
+    map = msg.data
+    rospy.loginfo(map[0])
+
+
+def main():
+    rospy.init_node('predictive_control')
+    rospy.Subscriber("/map", OccupancyGrid, callback)
+    #rate = rospy.Rate(hz)
+    rospy.spin()
+    #while not rospy.is_shutdown():
+        
+if __name__ == '__main__':
+    main()
 
 
 def handle(hI, eta, c, m, e):
