@@ -1,34 +1,57 @@
 #!/usr/bin/env python3
-from cmath import pi
+from cmath import pi, sqrt
 import math as mt
 import rospy
 import numpy as np
-from nav_msgs.msg import OccupancyGrid
-
-def callback(msg):
-    map = msg.data
-    rospy.loginfo(map[0])
+from nav_msgs.msg import OccupancyGrid,Odometry
+import message_filters
 
 
-def main():
-    rospy.init_node('predictive_control')
-    rospy.Subscriber("/map", OccupancyGrid, callback)
-    #rate = rospy.Rate(hz)
-    rospy.spin()
-    #while not rospy.is_shutdown():
-        
-if __name__ == '__main__':
-    main()
+def euler_from_quaternion(x, y, z, w):
+        """
+        Convert a quaternion into euler angles (roll, pitch, yaw)
+        roll is rotation around x in radians (counterclockwise)
+        pitch is rotation around y in radians (counterclockwise)
+        yaw is rotation around z in radians (counterclockwise)
+        """
+        t0 = +2.0 * (w * x + y * z)
+        t1 = +1.0 - 2.0 * (x * x + y * y)
+        roll_x = mt.atan2(t0, t1)
+     
+        t2 = +2.0 * (w * y - z * x)
+        t2 = +1.0 if t2 > +1.0 else t2
+        t2 = -1.0 if t2 < -1.0 else t2
+        pitch_y = mt.asin(t2)
+     
+        t3 = +2.0 * (w * z + x * y)
+        t4 = +1.0 - 2.0 * (y * y + z * z)
+        yaw_z = mt.atan2(t3, t4)
+     
+        return roll_x, pitch_y, yaw_z
 
 
-def handle(hI, eta, c, m, e):
-    y = []
-    for i in range(hI):
-        x
-        if(hI[i] > eta):
-            x = hI[i]*(-m*mt.atan(c*(hI[i]-eta)*2/pi))
-    return x
+def colcheck(res, x_o, y_o, grid, q_x, q_y):
+    width = 384
+    height = 384
+    dist = 1000
+    d = []
+    for i in range(len(grid)):
+        if(grid[i] > 90):
+            x = i // width
+            y = i % height
+            dx = (q_x - (x * res + x_o))
+            dy = (q_y - (y * res + y_o))
+            dmin = mt.sqrt(dx**2 + dy**2)
+            if(dmin < dist):
+                dist = dmin
+                d = [dx, dy]
     
+    return dist, d
+            
+            
+
+
+
 
 def f_func(x):
     f = np.matrix([[mt.cos(x[2]), 0],[mt.sin(x[2]), 0],[0, 1]])
@@ -99,3 +122,55 @@ def trajgrad_k(j, xbar, ubar, n, m, ts):
         J_k[:, i*m:m*i+2] = B
 
     return J_k
+
+def callback(grid, odom):
+    map = grid.data
+    x = odom.pose.pose.position.x
+    y = odom.pose.pose.position.y
+
+    #grid origin
+    x_o = grid.info.origin.position.x
+    y_o = grid.info.origin.position.y
+
+    #grid resolution
+    res = grid.info.resolution
+
+    quat_w = odom.pose.pose.orientation.w
+    quat_x = odom.pose.pose.orientation.x
+    quat_y = odom.pose.pose.orientation.y
+    quat_z = odom.pose.pose.orientation.z
+
+    roll,pitch,yaw = euler_from_quaternion(quat_x,quat_y,quat_z,quat_w)
+
+    dist, d = colcheck(res, x_o, y_o, map, x, y)
+    
+
+    rospy.loginfo("x is: %f, y is: %f, yaw is : %f, distmin is: %f", x, y, yaw, dist)
+
+def main():
+    rospy.init_node('predictive_control')
+    map_sub = message_filters.Subscriber('/map', OccupancyGrid)
+    odom_sub = message_filters.Subscriber('/odom', Odometry)
+    ts = message_filters.ApproximateTimeSynchronizer([map_sub, odom_sub], 1000, 0.1, allow_headerless=True)
+    
+    #rate = rospy.Rate(100)
+    
+    ts.registerCallback(callback)
+    rospy.spin()
+    
+    
+    #rospy.spin()
+        
+if __name__ == '__main__':
+    main()
+
+
+def handle(hI, eta, c, m, e):
+    y = []
+    for i in range(hI):
+        x
+        if(hI[i] > eta):
+            x = hI[i]*(-m*mt.atan(c*(hI[i]-eta)*2/pi))
+    return x
+    
+
