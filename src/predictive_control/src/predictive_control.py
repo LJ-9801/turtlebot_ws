@@ -30,6 +30,18 @@ def euler_from_quaternion(x, y, z, w):
         return roll_x, pitch_y, yaw_z
 
 
+def colsafe(hI, eta, c, m, e):
+    y = []
+    for i in range(len(hI)):
+        c1 = int(hI[i]>eta)
+        c2 = int(hI[i]>0)
+        c3 = int(hI[i]<eta)
+        c4 = int(hI[i]<=0)
+        x = c1*(-m*mt.atan(c*(hI[i]-eta))*2/pi)+c2*c3*(e*(eta-hI[i])/eta)+c4*e
+        y.append(x)
+
+    return y
+
 def colcheck(res, x_o, y_o, grid, q_x, q_y):
     width = 384
     height = 384
@@ -49,9 +61,6 @@ def colcheck(res, x_o, y_o, grid, q_x, q_y):
     return dist, d
             
             
-
-
-
 
 def f_func(x):
     f = np.matrix([[mt.cos(x[2]), 0],[mt.sin(x[2]), 0],[0, 1]])
@@ -158,8 +167,6 @@ def main():
     ts.registerCallback(callback)
     rospy.spin()
     
-    
-    #rospy.spin()
         
 if __name__ == '__main__':
     main()
