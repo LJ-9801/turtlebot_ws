@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 from cmath import pi, sqrt
-import imp
 import math as mt
 import rospy
 import numpy as np
@@ -116,11 +115,6 @@ class Collision_Routine:
             grad_d_x[:,i:i+1] = (d_epsilon-d)/epsilon
         
         return grad_d_x
-    
-
-
-        
-
 
         
 
@@ -195,17 +189,10 @@ def trajgrad_k(j, xbar, ubar, n, m, ts):
 
     return J_k
 
-def callback(grid, odom):
+def control_loop(grid, odom):
     map = grid.data
     x = odom.pose.pose.position.x
     y = odom.pose.pose.position.y
-
-    #grid origin
-    x_o = grid.info.origin.position.x
-    y_o = grid.info.origin.position.y
-
-    #grid resolution
-    res = grid.info.resolution
 
     quat_w = odom.pose.pose.orientation.w
     quat_x = odom.pose.pose.orientation.x
@@ -214,20 +201,74 @@ def callback(grid, odom):
 
     roll,pitch,yaw = euler_from_quaternion(quat_x,quat_y,quat_z,quat_w)
 
-    dist, d = colcheck(res, x_o, y_o, map, x, y)
+    collisionCheck = Collision_Routine(grid, odom)
+
+
+    dist, d = collisionCheck.colcheck(collisionCheck.q)
+
+    #parameters
+    N = 20
+    Nmax = 100
+    ts = 0.1
+    m = 2 #2 inputs
+    n = 3 #3 outputs
+
+    k_pot = 0.06
+
+    #constraints  
+    umax = np.array([[4],[2]])
+    ubarmx = np.reshape((np.ones((1,20))*umax).T,(40,1))
+    x3min = -pi
+    x3max = pi
+
+    u0 = 0.1*np.random.rand(m,N)
+    u0bar = np.reshape(u0.T, (N*m,1))
+    x0 = collisionCheck.q
+
+    x = np.zeros((n,Nmax+1))
+    u = np.zeros((m,Nmax))
+    x[:,0:1] = x0
+    xbar = np.zeros((n*N,N))
+    ubar = np.zeros((m*N,N))
+    ubar[:,0:1] = u0bar
+    xbar[:,0:1] = traj(x0, u0bar, m, ts)
+
+    epsilon = 0.8
+    Kp = np.diag([1,1,0.1])*0.5
+
+    for i in range(Nmax):
+        J = trajgrad(xbar[:,0:1], ubar[:,0:1], n, m, ts)
+        x_NstepAhead = xbar[len(xbar)-3:len(xbar)]
+
+        '''
+        formulate constriant right here
+        '''
+        #inequality constraint
+        Aineq = np.zeros((N-1,m*N))
+        bineq = np.zeros((N-1,1))
+        #max
+        Ax3ineqmx = np.zeros(N-1,m*N)
+        bx3ineqmx = np.zeros(N-1,1)
+        #min
+        Ax3ineqmn = np.zeros(N-1,m*N)
+        bx3ineqmn = np.zeros(N-1,1)
+
+        rospy.loginfo("J1 is: %f", J[0,0])
+
+
+
+
+
     
 
-    rospy.loginfo("x is: %f, y is: %f, yaw is : %f, distmin is: %f", x, y, yaw, dist)
 
 def main():
     rospy.init_node('predictive_control')
     map_sub = message_filters.Subscriber('/map', OccupancyGrid)
     odom_sub = message_filters.Subscriber('/odom', Odometry)
     ts = message_filters.ApproximateTimeSynchronizer([map_sub, odom_sub], 1000, 0.1, allow_headerless=True)
-    
-    #rate = rospy.Rate(100)
-    
-    ts.registerCallback(callback)
+
+    ts.registerCallback(control_loop)
     rospy.spin()
     
         
