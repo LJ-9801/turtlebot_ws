@@ -1,10 +1,17 @@
 #!/usr/bin/env python3
 from cmath import pi, sqrt
+import imp
 import math as mt
 import rospy
 import numpy as np
 from nav_msgs.msg import OccupancyGrid,Odometry
 import message_filters
+from qpsolvers import solve_qp
+
+
+def quadprog(H,F,A,B,lb,ub,m,N):
+    x = solve_qp(H,F,A,B,[],[],lb,ub,np.zeros((m*N,1)))
+    return x
 
 
 def euler_from_quaternion(x, y, z, w):
@@ -42,25 +49,80 @@ def colsafe(hI, eta, c, m, e):
 
     return y
 
-def colcheck(res, x_o, y_o, grid, q_x, q_y):
-    width = 384
-    height = 384
-    dist = 1000
-    d = []
-    for i in range(len(grid)):
-        if(grid[i] > 90):
-            x = i // width
-            y = i % height
-            dx = (q_x - (x * res + x_o))
-            dy = (q_y - (y * res + y_o))
-            dmin = mt.sqrt(dx**2 + dy**2)
-            if(dmin < dist):
-                dist = dmin
-                d = [dx, dy]
+
+class Collision_Routine:
+    def __init__(self, grid, odom):
+        
+        #robot state
+        x = odom.pose.pose.position.x
+        y = odom.pose.pose.position.y
+        quat_w = odom.pose.pose.orientation.w
+        quat_x = odom.pose.pose.orientation.x
+        quat_y = odom.pose.pose.orientation.y
+        quat_z = odom.pose.pose.orientation.z
+        roll,pitch,yaw = euler_from_quaternion(quat_x,quat_y,quat_z,quat_w)
+        q = np.array([[x],[y],[yaw]])
+        self.q = q
+
+        #map info
+        self.map = grid.data
+        self.x_o = grid.info.origin.position.x
+        self.y_o = grid.info.origin.position.y
+        self.res = grid.info.resolution
+
+    def colcheck(self, q):
+        width = 384
+        height = 384
+        dist = 1000
+        d = []
+        for i in range(len(self.map)):
+            if(self.map[i] > 90):
+                x = i // width
+                y = i % height
+                dx = (q[0] - (x * self.res + self.x_o))
+                dy = (q[1] - (y * self.res + self.y_o))
+                dmin = mt.sqrt(dx**2 + dy**2)
+                if(dmin < dist):
+                    dist = dmin
+                    d = [dx, dy]
+        
+        return dist, d
+
+    def gradU1_rep(self, q, rho0, eta):
+        e = 0.01
+        dist, rho = self.colcheck(q)
+        dist, rho1 = self.colcheck(q+np.array([[1],[0],[0]])*e)
+        dist1, rho2 = self.colcheck(q+np.array([[0],[1],[0]])*e)
+        dist2, rho3 = self.colcheck(q+np.array([[0],[0],[1]])*e)
+
+        gradrho = np.array([(rho1-rho)/e, (rho2-rho)/e, (rho3-rho)/e])
+        
+        if(rho < rho0):
+            gradx = eta*(rho-rho0)*gradrho
+        else:
+            gradx = np.array([0,0,0])
+
+        return gradx
+
+    def grad_numerical(self, d, x):
+        nd = len(d)
+        n = len(x)
+        epsilon = 0.01
+        grad_d_x = np.zeros((nd,n))
+        for i in range(n):
+            e_i = np.zeros((n,1))
+            e_i[i] = 1
+            d_epsilon, rho = self.colcheck(x+epsilon*e_i)
+            grad_d_x[:,i:i+1] = (d_epsilon-d)/epsilon
+        
+        return grad_d_x
     
-    return dist, d
-            
-            
+
+
+        
+
+
+        
 
 def f_func(x):
     f = np.matrix([[mt.cos(x[2]), 0],[mt.sin(x[2]), 0],[0, 1]])
@@ -116,6 +178,7 @@ def trajgrad(xbar, ubar, n, m, ts):
         J[:, i*m:m*i+2]=B
     
     return J
+
 
 
 def trajgrad_k(j, xbar, ubar, n, m, ts):
