@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 from cmath import pi, sqrt
 import math as mt
-
+from scipy import sparse
 import qpsolvers
 import rospy
 import numpy as np
@@ -12,7 +12,9 @@ from qpsolvers import solve_qp
 
 def quadprog(P,q,G,h,lb,ub,m,N):
     #print(qpsolvers.available_solvers)
-    x = solve_qp(P=P,q=q,G=G,h=h,A=None,b=None,lb = lb,ub = ub,solver= 'quadprog' ,initvals = np.zeros((m*N,1)))
+    sP = sparse.csc_matrix(P)
+    sG = sparse.csc_matrix(G)
+    x = solve_qp(P=sP,q=q,G=sG,h=h,A=None,b=None,lb = lb,ub = ub,solver= 'osqp' ,initvals = np.zeros((m*N,1)))
     return x
 
 
@@ -282,9 +284,16 @@ def control_loop(grid, odom):
     A = np.concatenate((Aineq, Ax3ineqmn, Ax3ineqmx))
     B = np.concatenate((bineq, bx3ineqmn, bx3ineqmx))
     H = J.T @ J + epsilon * np.eye(m*N)
-    F = J.T @ (Kp*(x_NstepAhead-x_f))
+    F = J.T @ (Kp @ (x_NstepAhead-x_f))
     # waiting to download solver
     delta_ubar = quadprog(H, F, A, B, -ubarmx-ubar, ubarmx-ubar, m, N)
+    ubar_next = ubar + delta_ubar
+
+    pred_collision = 1
+    alpha = 1
+    pot_gain = 1
+    E = epsilon * np.diagflat(np.reshape((np.ones((m,1))*np.arange(1,1+N*0.1,0.1)).T,(m*N,1)))
+    ubar_pot = np.zeros((m*N,1))
     rospy.loginfo("J1 is: %f stop", delta_ubar[0])
 
 
@@ -305,13 +314,5 @@ def main():
 if __name__ == '__main__':
     main()
 
-
-def handle(hI, eta, c, m, e):
-    y = []
-    for i in range(hI):
-        x
-        if(hI[i] > eta):
-            x = hI[i]*(-m*mt.atan(c*(hI[i]-eta)*2/pi))
-    return x
     
 
