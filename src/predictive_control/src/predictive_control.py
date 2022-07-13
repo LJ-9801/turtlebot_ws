@@ -96,14 +96,14 @@ class Collision_Routine:
     def gradU1_rep(self, q, rho0, eta):
         e = 0.01
         dist, rho = self.colcheck(q)
-        dist, rho1 = self.colcheck(q+np.array([[1],[0],[0]])*e)
-        dist1, rho2 = self.colcheck(q+np.array([[0],[1],[0]])*e)
-        dist2, rho3 = self.colcheck(q+np.array([[0],[0],[1]])*e)
+        dist1, rho1 = self.colcheck(q+np.array([[1],[0],[0]])*e)
+        dist2, rho2 = self.colcheck(q+np.array([[0],[1],[0]])*e)
+        dist3, rho3 = self.colcheck(q+np.array([[0],[0],[1]])*e)
 
-        gradrho = np.array([(rho1-rho)/e, (rho2-rho)/e, (rho3-rho)/e])
+        gradrho = np.array([(dist1-dist)/e, (dist2-dist)/e, (dist3-dist)/e])
         
-        if(rho < rho0):
-            gradx = eta*(rho-rho0)*gradrho
+        if(dist < rho0):
+            gradx = eta*(dist-rho0) * gradrho
         else:
             gradx = np.array([0,0,0])
 
@@ -217,7 +217,7 @@ def control_loop(grid, odom):
     #parameters
     dmin= 0.2
     N = 20
-    Nmax = 100
+    #Nmax = 100
     ts = 0.1
     m = 2 #2 inputs
     n = 3 #3 outputs
@@ -234,9 +234,9 @@ def control_loop(grid, odom):
     u0bar = np.reshape(u0.T, (N*m,1))
     x0 = np.array([[q_x],[q_y],[yaw]])
 
-    x = np.zeros((n,Nmax+1))
-    u = np.zeros((m,Nmax))
-    x[:,0:1] = x0
+    x = np.zeros((n,1))
+    u = np.zeros((m,1))
+    x = x0
     xbar = np.zeros((n*N,1))
     ubar = np.zeros((m*N,1))
     ubar = u0bar
@@ -287,25 +287,62 @@ def control_loop(grid, odom):
     F = J.T @ (Kp @ (x_NstepAhead-x_f))
     # waiting to download solver
     delta_ubar = quadprog(H, F, A, B, -ubarmx-ubar, ubarmx-ubar, m, N)
+    delta_ubar = np.reshape(delta_ubar, (len(delta_ubar),1))
     ubar_next = ubar + delta_ubar
-
+    #print(delta_ubar)
     pred_collision = 1
     alpha = 1
     pot_gain = 1
     E = epsilon * np.diagflat(np.reshape((np.ones((m,1))*np.arange(1,1+N*0.1,0.1)).T,(m*N,1)))
     ubar_pot = np.zeros((m*N,1))
-    rospy.loginfo("J1 is: %f stop", delta_ubar[0])
-
-
-
     
+
+
+    while(pred_collision > 0):
+        pred_collision = 0
+        u[0] = ubar_next[0]
+        u[1] = ubar_next[1]
+        x = fu_disc(x, u, ts)
+        x = np.reshape(x,(3,1))
+        ubar = np.concatenate((ubar_next[m:],np.zeros((m,1))))
+        xbar = traj(x, ubar, m, ts)
+        
+
+        for i in range(1,N-1):
+            x_subk = xbar[i*n+3:i*n+6]
+            dist, d = collisionCheck.colcheck(x_subk)
+            #dist = 0
+            if(dist < dmin / 1.2):
+                pred_collision = 1
+                J_k = trajgrad_k(i, xbar, ubar, n, m, ts)
+                ubar_pot = ubar_pot + (collisionCheck.gradU1_rep(x_subk, 2*dmin, k_pot) @ J_k).T
+            
+        if(pred_collision > 0):
+            alpha = alpha/1.5
+            H = alpha*J.T @ J + E
+            H = 0.5*(H @ H.T)
+            F = alpha * J.T @ (Kp @ (x_NstepAhead-x_f))
+            delta_ubar = quadprog(H, F, A, B, -ubarmx-ubar, ubarmx-ubar, m, N)
+            if(alpha < 0.1):
+                pot_gain = pot_gain*1.1
+                delta_ubar = delta_ubar + pot_gain*ubar_pot
+            ubar_next = ubar+delta_ubar
+            """
+            finish one loop    
+            """
+
+    rospy.loginfo("u is: %f, %f stop", u[0], u[1])
+            
+        
+            
+
 
 
 def main():
     rospy.init_node('predictive_control')
     map_sub = message_filters.Subscriber('/map', OccupancyGrid)
     odom_sub = message_filters.Subscriber('/odom', Odometry)
-    ts = message_filters.ApproximateTimeSynchronizer([map_sub, odom_sub], 1000, 0.1, allow_headerless=True)
+    ts = message_filters.ApproximateTimeSynchronizer([map_sub, odom_sub], 5000, 0.1, allow_headerless=True)
 
     ts.registerCallback(control_loop)
     rospy.spin()
