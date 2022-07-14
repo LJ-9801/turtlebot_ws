@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 from cmath import pi, sqrt
 import math as mt
+from ossaudiodev import control_labels
 from scipy import sparse
 import qpsolvers
 import rospy
 import numpy as np
 from nav_msgs.msg import OccupancyGrid,Odometry
+from geometry_msgs.msg import Twist
 import message_filters
 from qpsolvers import solve_qp
+
 
 
 def quadprog(P,q,G,h,lb,ub,m,N):
@@ -56,18 +59,6 @@ def colsafe(hI, eta, c, m, e):
 
 class Collision_Routine:
     def __init__(self, grid, odom):
-        
-        #robot state
-        x = odom.pose.pose.position.x
-        y = odom.pose.pose.position.y
-        quat_w = odom.pose.pose.orientation.w
-        quat_x = odom.pose.pose.orientation.x
-        quat_y = odom.pose.pose.orientation.y
-        quat_z = odom.pose.pose.orientation.z
-        roll,pitch,yaw = euler_from_quaternion(quat_x,quat_y,quat_z,quat_w)
-        q = np.array([[x],[y],[yaw]])
-        self.q = q
-
         #map info
         self.map = grid.data
         self.x_o = grid.info.origin.position.x
@@ -195,156 +186,181 @@ def trajgrad_k(j, xbar, ubar, n, m, ts):
 
     return J_k
 
-def control_loop(grid, odom):
-    map = grid.data
-    q_x = odom.pose.pose.position.x
-    q_y = odom.pose.pose.position.y
 
-    quat_w = odom.pose.pose.orientation.w
-    quat_x = odom.pose.pose.orientation.x
-    quat_y = odom.pose.pose.orientation.y
-    quat_z = odom.pose.pose.orientation.z
+class Control_Loop(object):
+    def __init__(self, grid, odom):
+        self.u = np.zeros((2,1))
+        self.grid = grid
+        self.odom = odom
 
-    roll,pitch,yaw = euler_from_quaternion(quat_x,quat_y,quat_z,quat_w)
+    def callback(self):
+        rospy.loginfo("u is: %f, %f stop", self.u[0], self.u[1])
 
-    x_f = np.array([[6],[7],[2]])
+    def loop(self):
+        q_x = self.odom.pose.pose.position.x
+        q_y = self.odom.pose.pose.position.y
 
-    eta=.2
-    c=100
-    M=50
-    repel=10
+        quat_w = self.odom.pose.pose.orientation.w
+        quat_x = self.odom.pose.pose.orientation.x
+        quat_y = self.odom.pose.pose.orientation.y
+        quat_z = self.odom.pose.pose.orientation.z
 
-    #parameters
-    dmin= 0.2
-    N = 20
-    #Nmax = 100
-    ts = 0.1
-    m = 2 #2 inputs
-    n = 3 #3 outputs
+        roll,pitch,yaw = euler_from_quaternion(quat_x,quat_y,quat_z,quat_w)
 
-    k_pot = 0.06
+        x_f = np.array([[-2],[-2],[2]])
 
-    #constraints  
-    umax = np.array([[4],[2]])
-    ubarmx = np.reshape((np.ones((1,20))*umax).T,(40,1))
-    x3min = -pi
-    x3max = pi
+        eta=.2
+        c=100
+        M=50
+        repel=10
 
-    u0 = 0.1*np.random.rand(m,N)
-    u0bar = np.reshape(u0.T, (N*m,1))
-    x0 = np.array([[q_x],[q_y],[yaw]])
+        #parameters
+        dmin= 0.2
+        N = 20
+        #Nmax = 100
+        ts = 0.1
+        m = 2 #2 inputs
+        n = 3 #3 outputs
 
-    x = np.zeros((n,1))
-    u = np.zeros((m,1))
-    x = x0
-    xbar = np.zeros((n*N,1))
-    ubar = np.zeros((m*N,1))
-    ubar = u0bar
-    xbar = traj(x0, u0bar, m, ts)
+        k_pot = 0.06
 
-    epsilon = 0.8
-    Kp = np.diag([1,1,0.1])*0.5
+        #constraints  
+        umax = np.array([[4],[2]])
+        ubarmx = np.reshape((np.ones((1,20))*umax).T,(40,1))
+        x3min = -pi
+        x3max = pi
 
-    #for i in range(Nmax):
-    J = trajgrad(xbar, ubar, n, m, ts)
-    x_NstepAhead = xbar[len(xbar)-3:len(xbar)]
+        u0 = 0.1*np.random.rand(m,N)
+        u0bar = np.reshape(u0.T, (N*m,1))
+        x0 = np.array([[q_x],[q_y],[yaw]])
 
-    '''
-    formulate constriant right here
-    '''
-    #inequality constraint
-    Aineq = np.zeros((N-1,m*N))
-    bineq = np.zeros((N-1,1))
-    #max
-    Ax3ineqmx = np.zeros((N-1,m*N))
-    bx3ineqmx = np.zeros((N-1,1))
-    #min
-    Ax3ineqmn = np.zeros((N-1,m*N))
-    bx3ineqmn = np.zeros((N-1,1))
-    # start predicting
-    for j in range(1,N):
-        x_subk = xbar[len(xbar)-3:len(xbar)]
-        collisionCheck = Collision_Routine(grid, odom)
-        dist, d = collisionCheck.colcheck(x_subk)
-        
-        grad_dx = collisionCheck.grad_numerical(d,x_subk)
-        J_subk = trajgrad_k(j, xbar, ubar, n, m, ts)
-        if(dist < dmin):
-            Aineq[j-1,:] = -d.T @ grad_dx @ J_subk
-            bineq[j-1] = colsafe(0.5*d.T@d, eta, c, M, repel)
-            
-        if(x_subk[2] < x3min + 0.05):
-            Ax3ineqmn = -J_subk[2,:]
-            bx3ineqmn = -colsafe(x_subk[2] - x3max, eta, c, M, repel)
-        if(x_subk[2] > x3max - 0.05):
-            Ax3ineqmn = J_subk[2,:]
-            bx3ineqmn = -colsafe(x3max - x_subk[2], eta, c, M, repel)
-    
-    #form constraints
-    A = np.concatenate((Aineq, Ax3ineqmn, Ax3ineqmx))
-    B = np.concatenate((bineq, bx3ineqmn, bx3ineqmx))
-    H = J.T @ J + epsilon * np.eye(m*N)
-    F = J.T @ (Kp @ (x_NstepAhead-x_f))
-    # waiting to download solver
-    delta_ubar = quadprog(H, F, A, B, -ubarmx-ubar, ubarmx-ubar, m, N)
-    delta_ubar = np.reshape(delta_ubar, (len(delta_ubar),1))
-    ubar_next = ubar + delta_ubar
-    #print(delta_ubar)
-    pred_collision = 1
-    alpha = 1
-    pot_gain = 1
-    E = epsilon * np.diagflat(np.reshape((np.ones((m,1))*np.arange(1,1+N*0.1,0.1)).T,(m*N,1)))
-    ubar_pot = np.zeros((m*N,1))
-    
+        x = np.zeros((n,1))
+        u = np.zeros((m,1))
+        x = x0
+        xbar = np.zeros((n*N,1))
+        ubar = np.zeros((m*N,1))
+        ubar = u0bar
+        xbar = traj(x0, u0bar, m, ts)
 
+        epsilon = 0.8
+        Kp = np.diag([1,1,0.1])*0.5
 
-    while(pred_collision > 0):
-        pred_collision = 0
-        u[0] = ubar_next[0]
-        u[1] = ubar_next[1]
-        x = fu_disc(x, u, ts)
-        x = np.reshape(x,(3,1))
-        ubar = np.concatenate((ubar_next[m:],np.zeros((m,1))))
-        xbar = traj(x, ubar, m, ts)
-        
+        #for i in range(Nmax):
+        J = trajgrad(xbar, ubar, n, m, ts)
+        x_NstepAhead = xbar[len(xbar)-3:len(xbar)]
 
-        for i in range(1,N-1):
-            x_subk = xbar[i*n+3:i*n+6]
+        '''
+        formulate constriant right here
+        '''
+        #inequality constraint
+        Aineq = np.zeros((N-1,m*N))
+        bineq = np.zeros((N-1,1))
+        #max
+        Ax3ineqmx = np.zeros((N-1,m*N))
+        bx3ineqmx = np.zeros((N-1,1))
+        #min
+        Ax3ineqmn = np.zeros((N-1,m*N))
+        bx3ineqmn = np.zeros((N-1,1))
+        # start predicting
+        for j in range(1,N):
+            x_subk = xbar[len(xbar)-3:len(xbar)]
+            collisionCheck = Collision_Routine(self.grid, self.odom)
             dist, d = collisionCheck.colcheck(x_subk)
-            #dist = 0
-            if(dist < dmin / 1.2):
-                pred_collision = 1
-                J_k = trajgrad_k(i, xbar, ubar, n, m, ts)
-                ubar_pot = ubar_pot + (collisionCheck.gradU1_rep(x_subk, 2*dmin, k_pot) @ J_k).T
             
-        if(pred_collision > 0):
-            alpha = alpha/1.5
-            H = alpha*J.T @ J + E
-            H = 0.5*(H @ H.T)
-            F = alpha * J.T @ (Kp @ (x_NstepAhead-x_f))
-            delta_ubar = quadprog(H, F, A, B, -ubarmx-ubar, ubarmx-ubar, m, N)
-            if(alpha < 0.1):
-                pot_gain = pot_gain*1.1
-                delta_ubar = delta_ubar + pot_gain*ubar_pot
-            ubar_next = ubar+delta_ubar
-            """
-            finish one loop    
-            """
-
-    rospy.loginfo("u is: %f, %f stop", u[0], u[1])
-            
+            grad_dx = collisionCheck.grad_numerical(d,x_subk)
+            J_subk = trajgrad_k(j, xbar, ubar, n, m, ts)
+            if(dist < dmin):
+                Aineq[j-1,:] = -d.T @ grad_dx @ J_subk
+                bineq[j-1] = colsafe(0.5*d.T@d, eta, c, M, repel)
+                
+            if(x_subk[2] < x3min + 0.05):
+                Ax3ineqmn = -J_subk[2,:]
+                bx3ineqmn = -colsafe(x_subk[2] - x3max, eta, c, M, repel)
+            if(x_subk[2] > x3max - 0.05):
+                Ax3ineqmn = J_subk[2,:]
+                bx3ineqmn = -colsafe(x3max - x_subk[2], eta, c, M, repel)
         
+        #form constraints
+        A = np.concatenate((Aineq, Ax3ineqmn, Ax3ineqmx))
+        B = np.concatenate((bineq, bx3ineqmn, bx3ineqmx))
+        H = J.T @ J + epsilon * np.eye(m*N)
+        F = J.T @ (Kp @ (x_NstepAhead-x_f))
+        # waiting to download solver
+        delta_ubar = quadprog(H, F, A, B, -ubarmx-ubar, ubarmx-ubar, m, N)
+        delta_ubar = np.reshape(delta_ubar, (len(delta_ubar),1))
+        ubar_next = ubar + delta_ubar
+        #print(delta_ubar)
+        pred_collision = 1
+        alpha = 1
+        pot_gain = 1
+        E = epsilon * np.diagflat(np.reshape((np.ones((m,1))*np.arange(1,1+N*0.1,0.1)).T,(m*N,1)))
+        ubar_pot = np.zeros((m*N,1))
+        
+
+
+        while(pred_collision > 0):
+            pred_collision = 0
+            u[0] = ubar_next[0]
+            u[1] = ubar_next[1]
+            self.u = u
+            x = fu_disc(x, u, ts)
+            x = np.reshape(x,(3,1))
+            ubar = np.concatenate((ubar_next[m:],np.zeros((m,1))))
+            xbar = traj(x, ubar, m, ts)
             
+
+            for i in range(1,N-1):
+                x_subk = xbar[i*n+3:i*n+6]
+                dist, d = collisionCheck.colcheck(x_subk)
+                #dist = 0
+                if(dist < dmin / 1.2):
+                    pred_collision = 1
+                    J_k = trajgrad_k(i, xbar, ubar, n, m, ts)
+                    ubar_pot = ubar_pot + (collisionCheck.gradU1_rep(x_subk, 2*dmin, k_pot) @ J_k).T
+                
+            if(pred_collision > 0):
+                alpha = alpha/1.5
+                H = alpha*J.T @ J + E
+                H = 0.5*(H @ H.T)
+                F = alpha * J.T @ (Kp @ (x_NstepAhead-x_f))
+                delta_ubar = quadprog(H, F, A, B, -ubarmx-ubar, ubarmx-ubar, m, N)
+                if(alpha < 0.1):
+                    pot_gain = pot_gain*1.1
+                    delta_ubar = delta_ubar + pot_gain*ubar_pot
+                ubar_next = ubar+delta_ubar
+                """
+                finish one loop    
+                """
+        return self.u
+
+def pub_vel(vel):
+    pub_msg = Twist()
+    pub_msg.linear.x = vel[0]
+    pub_msg.angular.z = vel[0]
+
+    return pub_msg
+
+
+def main_loop(grid, odom):
+    control_loop = Control_Loop(grid, odom)
+    u = control_loop.loop()
+    control_loop.callback()
+
+    pub = rospy.Publisher('cmd_vel', Twist, queue_size=10)
+
+    vel = pub_vel(u)
+    pub.publish(vel)
 
 
 
 def main():
     rospy.init_node('predictive_control')
+
     map_sub = message_filters.Subscriber('/map', OccupancyGrid)
     odom_sub = message_filters.Subscriber('/odom', Odometry)
-    ts = message_filters.ApproximateTimeSynchronizer([map_sub, odom_sub], 5000, 0.1, allow_headerless=True)
+    ts = message_filters.ApproximateTimeSynchronizer([map_sub, odom_sub], 10000, 0.1, allow_headerless=True)
 
-    ts.registerCallback(control_loop)
+    ts.registerCallback(main_loop)
     rospy.spin()
     
         
